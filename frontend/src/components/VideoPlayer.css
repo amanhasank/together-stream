@@ -70,3 +70,15 @@
   height: 100%;
 }
 
+/* Block user interactions for non-controllers, but allow programmatic updates */
+.video-wrapper.view-only {
+  /* Wrapper can have pointer-events, overlay will catch clicks */
+}
+
+.video-wrapper.view-only iframe {
+  /* Disable pointer-events on iframe to block clicks,
+     but programmatic API calls (playVideo, pauseVideo, seekTo) 
+     still work without pointer-events */
+  pointer-events: none;
+}
+

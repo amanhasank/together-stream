@@ -24,6 +24,7 @@ const Room = ({ user }) => {
   const [controller, setController] = useState(null);
   const [isController, setIsController] = useState(false);
   const playerRef = useRef(null);
+  const isSyncingRef = useRef(false); // Track if we're currently syncing (to allow programmatic changes)
   const syncIntervalRef = useRef(null);
   const messageIdsRef = useRef(new Set()); // Track message IDs to prevent duplicates
 
@@ -244,6 +245,9 @@ const Room = ({ user }) => {
     newSocket.on('play', ({ currentTime, timestamp }) => {
       console.log('📺 Received play event - mirroring on viewer:', { currentTime, isController });
       if (playerRef.current) {
+        // Mark that we're syncing (allow programmatic changes)
+        isSyncingRef.current = true;
+        
         // Sync time first (important for perfect sync)
         if (currentTime !== undefined && currentTime !== null) {
           const currentPlayerTime = playerRef.current.getCurrentTime();
@@ -266,7 +270,13 @@ const Room = ({ user }) => {
                 console.log('✅ Viewer: Video playing now');
               }
             }
+            // Reset sync flag after a short delay
+            setTimeout(() => {
+              isSyncingRef.current = false;
+            }, 500);
           });
+        } else {
+          isSyncingRef.current = false;
         }
       }
       setIsPlaying(true);
@@ -278,6 +288,9 @@ const Room = ({ user }) => {
     newSocket.on('pause', ({ currentTime, timestamp }) => {
       console.log('⏸️ Received pause event - mirroring on viewer:', { currentTime, isController, timestamp });
       if (playerRef.current) {
+        // Mark that we're syncing (allow programmatic changes)
+        isSyncingRef.current = true;
+        
         // Sync time first (important for perfect sync)
         if (currentTime !== undefined && currentTime !== null) {
           const currentPlayerTime = playerRef.current.getCurrentTime();
@@ -314,10 +327,13 @@ const Room = ({ user }) => {
                       console.log('✅ Viewer: Video successfully paused');
                     }
                   }
+                  // Reset sync flag
+                  isSyncingRef.current = false;
                 }, 200);
               }
             } catch (error) {
               console.error('Error pausing video:', error);
+              isSyncingRef.current = false;
             }
           };
           
@@ -326,6 +342,7 @@ const Room = ({ user }) => {
         } else {
           // Controller also updates state when receiving pause event (for consistency)
           console.log('Controller received pause event (state sync)');
+          isSyncingRef.current = false;
         }
       }
       setIsPlaying(false);
@@ -336,7 +353,11 @@ const Room = ({ user }) => {
 
     newSocket.on('seek', ({ currentTime, timestamp }) => {
       if (playerRef.current && !isController) {
+        isSyncingRef.current = true;
         playerRef.current.seekTo(currentTime, true);
+        setTimeout(() => {
+          isSyncingRef.current = false;
+        }, 300);
       }
       setCurrentTime(currentTime);
     });
@@ -351,6 +372,7 @@ const Room = ({ user }) => {
     // Perfect sync updates from controller
     newSocket.on('sync-update', ({ currentTime, isPlaying, timestamp }) => {
       if (playerRef.current && !isController) {
+        isSyncingRef.current = true;
         const now = Date.now();
         const elapsed = (now - timestamp) / 1000; // seconds elapsed
         const targetTime = currentTime + (isPlaying ? elapsed : 0);
@@ -369,6 +391,9 @@ const Room = ({ user }) => {
         } else if (!isPlaying && playerState === window.YT.PlayerState.PLAYING) {
           playerRef.current.pauseVideo();
         }
+        setTimeout(() => {
+          isSyncingRef.current = false;
+        }, 300);
       }
       setIsPlaying(isPlaying);
       setCurrentTime(currentTime);
@@ -503,13 +528,26 @@ const Room = ({ user }) => {
 
   const onPlayerReady = (event) => {
     playerRef.current = event.target;
+    
+    // For non-controllers: Disable all player controls and interactions
+    if (!isController && playerRef.current) {
+      try {
+        // Disable player controls programmatically
+        // Note: YouTube API doesn't have a direct method, but we control via opts
+        console.log('🔒 Player ready - View-only mode: All controls disabled');
+      } catch (error) {
+        console.error('Error disabling player controls:', error);
+      }
+    }
+    
     // Sync to current room state
     if (room?.playbackState) {
       const playbackState = room.playbackState;
       if (playbackState.currentTime > 0) {
         event.target.seekTo(playbackState.currentTime, true);
       }
-      if (playbackState.playing) {
+      if (playbackState.playing && isController) {
+        // Only auto-play if controller
         event.target.playVideo();
       } else {
         event.target.pauseVideo();
@@ -518,6 +556,38 @@ const Room = ({ user }) => {
   };
 
   const onPlayerStateChange = (event) => {
+    // CRITICAL: Only allow state changes if user is controller
+    // BUT: Allow programmatic changes from socket sync (isSyncingRef)
+    if (!isController) {
+      // If we're currently syncing (from socket events), allow the change
+      if (isSyncingRef.current) {
+        console.log('✅ Allowing programmatic state change during sync');
+        return; // Allow the change, but don't emit events
+      }
+      
+      // If NOT syncing, this is a manual user interaction - BLOCK IT
+      console.warn('⚠️ Non-controller attempted manual video state change - blocking');
+      // Force sync back to current room state
+      if (room?.playbackState && playerRef.current) {
+        const playbackState = room.playbackState;
+        if (playbackState.currentTime > 0) {
+          playerRef.current.seekTo(playbackState.currentTime, true);
+        }
+        if (playbackState.playing) {
+          const playerState = playerRef.current.getPlayerState();
+          if (playerState !== window.YT.PlayerState.PLAYING) {
+            playerRef.current.playVideo();
+          }
+        } else {
+          const playerState = playerRef.current.getPlayerState();
+          if (playerState === window.YT.PlayerState.PLAYING) {
+            playerRef.current.pauseVideo();
+          }
+        }
+      }
+      return; // Exit early - don't process state change
+    }
+    
     // Only sync if controller (non-controller is controlled by socket events)
     if (isController && playerRef.current && socket) {
       const currentTime = playerRef.current.getCurrentTime();
@@ -535,15 +605,8 @@ const Room = ({ user }) => {
       } else if (event.data === window.YT.PlayerState.BUFFERING) {
         // Don't sync buffering state
       }
-    } else {
-      // For non-controller, only update state (don't emit events)
-      // They receive play/pause events from socket
-      if (event.data === window.YT.PlayerState.PLAYING) {
-        setIsPlaying(true);
-      } else if (event.data === window.YT.PlayerState.PAUSED) {
-        setIsPlaying(false);
-      }
     }
+    // Note: Removed the else block that was blocking legitimate sync operations
   };
 
   if (loading) {

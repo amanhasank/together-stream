@@ -29,9 +29,11 @@ const VideoPlayer = ({
     width: '100%',
     playerVars: {
       autoplay: 0,
-      controls: 1,
+      controls: isController ? 1 : 0, // Disable controls for non-controllers
       rel: 0,
-      modestbranding: 1
+      modestbranding: 1,
+      disablekb: isController ? 0 : 1, // Disable keyboard controls for non-controllers
+      iv_load_policy: 3
     }
   };
 
@@ -252,7 +254,7 @@ const VideoPlayer = ({
           </div>
         </div>
       ) : (
-        <div className="video-wrapper" style={{ position: 'relative' }}>
+        <div className={`video-wrapper ${!isController ? 'view-only' : ''}`} style={{ position: 'relative' }}>
           <YouTube
             videoId={videoId}
             opts={opts}
@@ -261,19 +263,52 @@ const VideoPlayer = ({
             className="youtube-player"
           />
           {!isController && (
-            <div style={{
-              position: 'absolute',
-              top: '10px',
-              right: '10px',
-              background: 'rgba(0, 0, 0, 0.7)',
-              color: 'white',
-              padding: '0.5rem 1rem',
-              borderRadius: '8px',
-              fontSize: '0.875rem',
-              zIndex: 10
-            }}>
-              👁️ View Only Mode
-            </div>
+            <>
+              {/* Overlay to block user interactions but allow programmatic updates */}
+              <div 
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  background: 'transparent',
+                  zIndex: 100,
+                  cursor: 'not-allowed',
+                  pointerEvents: 'auto'
+                }}
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  // Don't show alert on every click, just block the interaction
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  return false;
+                }}
+                onDoubleClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                }}
+              />
+              {/* View Only Mode Badge */}
+              <div style={{
+                position: 'absolute',
+                top: '10px',
+                right: '10px',
+                background: 'rgba(255, 0, 0, 0.8)',
+                color: 'white',
+                padding: '0.5rem 1rem',
+                borderRadius: '8px',
+                fontSize: '0.875rem',
+                fontWeight: 'bold',
+                zIndex: 101,
+                pointerEvents: 'none',
+                boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)'
+              }}>
+                👁️ View Only Mode
+              </div>
+            </>
           )}
           {isController && onSkip && (
             <div style={{
